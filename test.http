@@ -1,0 +1,82 @@
+@conversation_id = 40c12dc1-3b5e-40df-9404-0b4ecf3f5c47
+
+### MongoDB 連線測試
+GET http://localhost:8000/api/v1/test/mongodb
+
+### Redis 連線測試
+GET http://localhost:8000/api/v1/test/redis
+
+### 向量數據庫測試
+GET http://localhost:8000/api/v1/test/vector
+
+### 建立新對話
+POST http://localhost:8000/api/v1/chat/conversations
+Content-Type: application/json
+
+{
+    "user_id": "test_user",
+    "initial_message": "你好，我想詢問產品相關的問題"
+}
+
+### 發送訊息
+POST http://localhost:8000/api/v1/chat/conversations/{{conversation_id}}/messages
+Content-Type: application/json
+
+{
+    "content": "請問你們的退貨政策是什麼？"
+}
+
+### 獲取對話歷史
+GET http://localhost:8000/api/v1/chat/conversations/{{conversation_id}}
+
+### 獲取用戶所有進行中的對話
+GET http://localhost:8000/api/v1/chat/conversations?user_id=test_user
+
+### LLM 直接測試
+POST http://localhost:8000/api/v1/llm/generate
+Content-Type: application/json
+
+{
+    "messages": [
+        {
+            "role": "user",
+            "content": "你好，可以幫我解釋一下你們的服務嗎？"
+        }
+    ],
+    "system_prompt": "你是一位專業的客服人員，請用友善的語氣回答客戶的問題。"
+}
+
+### 情感分析測試
+POST http://localhost:8000/api/v1/llm/analyze/sentiment
+Content-Type: application/json
+
+{
+    "text": "我對你們的服務非常滿意，回應速度很快，態度也很好！"
+}
+
+### 情感分析測試 - 負面
+POST http://localhost:8000/api/v1/llm/analyze/sentiment
+Content-Type: application/json
+
+{
+    "text": "等待時間太長了，客服態度也不好。"
+}
+
+### 情感分析測試 - 中性
+POST http://localhost:8000/api/v1/llm/analyze/sentiment
+Content-Type: application/json
+
+{
+    "text": "我想詢問一下商品的規格。"
+}
+
+### 意圖檢測測試
+POST http://localhost:8000/api/v1/llm/analyze/intent
+Content-Type: application/json
+
+{
+    "text": "我想退貨，商品有瑕疵"
+}
+
+### 結束對話
+DELETE http://localhost:8000/api/v1/chat/conversations/{{conversation_id}}
