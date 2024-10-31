@@ -1,78 +1,106 @@
+# src/llm/engine.py
+
 from typing import List, Dict, Optional, Any
-from openai import AsyncOpenAI
-from src.core.config import settings
 import json
 import logging
-import re
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.output_parsers import StrOutputParser
+from langchain_chroma import Chroma
+from src.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 class LLMEngine:
     def __init__(self):
-        self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-        self.model = settings.OPENAI_MODEL
-        self.temperature = settings.OPENAI_TEMPERATURE
-        self.max_tokens = settings.OPENAI_MAX_TOKENS
+        # 初始化 LLM
+        self.llm = ChatOpenAI(
+            model_name=settings.OPENAI_MODEL,
+            temperature=settings.OPENAI_TEMPERATURE,
+            max_tokens=settings.OPENAI_MAX_TOKENS
+        )
+        
+        # 初始化向量存儲
+        self.embeddings = OpenAIEmbeddings()
+        self.vectorstore = Chroma(
+            embedding_function=self.embeddings,
+            persist_directory="./data/vectordb"
+        )
+        
+        # 初始化基本提示模板
+        self.prompt = ChatPromptTemplate.from_messages([
+            ("system", "你是一個專業的客服助理。請提供準確、有幫助的回答。"),
+            MessagesPlaceholder(variable_name="history"),
+            ("human", "{input}")
+        ])
+        
+        # 創建基本鏈
+        self.chain = self.prompt | self.llm | StrOutputParser()
+
+    def _format_chat_history(self, messages: List[Dict[str, str]]) -> List[Any]:
+        """將消息歷史轉換為 LangChain 消息格式"""
+        formatted_messages = []
+        for msg in messages:
+            if msg["role"] == "system":
+                formatted_messages.append(SystemMessage(content=msg["content"]))
+            elif msg["role"] == "user":
+                formatted_messages.append(HumanMessage(content=msg["content"]))
+            elif msg["role"] == "assistant":
+                formatted_messages.append(AIMessage(content=msg["content"]))
+        return formatted_messages
 
     async def generate_response(
         self,
         messages: List[Dict[str, str]],
         system_prompt: Optional[str] = None
     ) -> str:
-        """生成 AI 回應"""
+        """生成回應"""
         try:
-            api_messages = []
+            # 準備聊天歷史
+            history = self._format_chat_history(messages[:-1])
             
+            # 如果有系統提示，更新提示模板
             if system_prompt:
-                api_messages.append({
-                    "role": "system",
-                    "content": system_prompt
-                })
+                prompt = ChatPromptTemplate.from_messages([
+                    ("system", system_prompt),
+                    MessagesPlaceholder(variable_name="history"),
+                    ("human", "{input}")
+                ])
+                chain = prompt | self.llm | StrOutputParser()
+            else:
+                chain = self.chain
             
-            api_messages.extend(messages)
+            # 生成回應
+            response = await chain.ainvoke({
+                "history": history,
+                "input": messages[-1]["content"]
+            })
             
-            logger.debug(f"發送請求至 OpenAI: {json.dumps(api_messages, indent=2, ensure_ascii=False)}")
-            
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=api_messages,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens
-            )
-            
-            response_text = response.choices[0].message.content
-            
-            logger.debug(f"收到 OpenAI 回應: {response_text}")
-            
-            return response_text
+            return response.strip()
             
         except Exception as e:
             logger.error(f"生成回應時發生錯誤: {str(e)}")
             raise Exception(f"無法生成回應: {str(e)}")
 
     async def analyze_sentiment(self, text: str) -> Dict[str, Any]:
-        """分析文本情感"""
+        """情感分析"""
         try:
-            prompt = f"""請分析以下文本的情感，並以 JSON 格式回傳結果：
-
-文本：{text}
-
-請依照以下格式回傳（請只回傳 JSON，不要加入其他文字）：
-{{
-    "score": <數字，介於-1到1之間，精確到小數點後一位>,
-    "label": "<情感標籤：正面、負面或中性>",
-    "explanation": "<簡短說明分析結果的理由>"
-}}"""
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", """分析以下文本的情感，以 JSON 格式返回：
+                {
+                    "score": (數字，介於-1到1之間),
+                    "label": "情感標籤",
+                    "explanation": "分析說明"
+                }"""),
+                ("human", "{text}")
+            ])
             
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3
-            )
+            chain = prompt | self.llm | StrOutputParser()
+            response = await chain.ainvoke({"text": text})
             
-            # 解析回應
             try:
-                result = json.loads(response.choices[0].message.content)
+                result = json.loads(response)
                 return {
                     "text": text,
                     "sentiment_score": float(result["score"]),
@@ -80,46 +108,30 @@ class LLMEngine:
                     "explanation": result["explanation"]
                 }
             except json.JSONDecodeError:
-                # 如果 JSON 解析失敗，嘗試使用正則表達式提取分數
-                content = response.choices[0].message.content
-                score_match = re.search(r'-?\d+\.?\d*', content)
-                if score_match:
-                    score = float(score_match.group())
-                    return {
-                        "text": text,
-                        "sentiment_score": score,
-                        "sentiment_label": "正面" if score > 0 else "負面" if score < 0 else "中性",
-                        "explanation": "無法解析詳細說明"
-                    }
-                else:
-                    raise ValueError("無法解析情感分析結果")
+                raise ValueError("無法解析情感分析結果")
             
         except Exception as e:
             logger.error(f"情感分析時發生錯誤: {str(e)}")
             raise Exception(f"無法進行情感分析: {str(e)}")
 
     async def detect_intent(self, text: str) -> Dict[str, str]:
-        """檢測用戶意圖"""
+        """意圖檢測"""
         try:
-            prompt = f"""請分析以下客服對話信息並以 JSON 格式回傳結果：
-
-文本：{text}
-
-請依照以下格式回傳（請只回傳 JSON，不要加入其他文字）：
-{{
-    "intent": "<意圖分類：提問、投訴、反饋、請求、問候、其他>",
-    "confidence": <信心分數，介於0到1之間>,
-    "explanation": "<簡短說明分類理由>"
-}}"""
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", """分析以下客服對話信息的意圖，以 JSON 格式返回：
+                {
+                    "intent": "意圖分類",
+                    "confidence": 信心分數,
+                    "explanation": "分類說明"
+                }"""),
+                ("human", "{text}")
+            ])
             
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3
-            )
+            chain = prompt | self.llm | StrOutputParser()
+            response = await chain.ainvoke({"text": text})
             
             try:
-                result = json.loads(response.choices[0].message.content)
+                result = json.loads(response)
                 return result
             except json.JSONDecodeError:
                 raise ValueError("無法解析意圖分析結果")
@@ -127,6 +139,15 @@ class LLMEngine:
         except Exception as e:
             logger.error(f"意圖檢測時發生錯誤: {str(e)}")
             raise Exception(f"無法檢測意圖: {str(e)}")
+
+    async def search_knowledge_base(self, query: str, k: int = 3) -> List[str]:
+        """搜索知識庫"""
+        try:
+            docs = await self.vectorstore.asimilarity_search(query, k=k)
+            return [doc.page_content for doc in docs]
+        except Exception as e:
+            logger.error(f"搜索知識庫時發生錯誤: {str(e)}")
+            raise Exception(f"無法搜索知識庫: {str(e)}")
 
 # Create LLM engine instance
 llm_engine = LLMEngine()
