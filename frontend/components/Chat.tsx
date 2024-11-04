@@ -2,12 +2,13 @@
 
 import dynamic from 'next/dynamic';
 import React, { useState, useRef, useLayoutEffect } from 'react';
-import { Send, Loader, Bot, User, AlertCircle } from 'lucide-react';
+import { Send, Loader, Bot, User, AlertCircle, Dog } from 'lucide-react';
 
 interface Message {
   role: 'user' | 'assistant' | 'error';
   content: string;
   timestamp?: string;
+  isSpecialKnowledge?: boolean;
 }
 
 interface ChatResponse {
@@ -25,9 +26,9 @@ const ChatComponent: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isSpecialMode, setIsSpecialMode] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // 使用 useLayoutEffect 來避免閃爍
   useLayoutEffect(() => {
     setMounted(true);
     return () => setMounted(false);
@@ -67,9 +68,14 @@ const ChatComponent: React.FC = () => {
       const data: ConversationResponse = await response.json();
       setConversationId(data.conversation_id);
       
+      const welcomeMessage = isSpecialMode 
+        ? '您好！我是特定知識助手。我可以回答關於西遊記、三國志、西廂記、勇者鬥惡龍和紅樓夢的問題。請問您想了解什麼？'
+        : '您好！我是 AI 客服助理。請問有什麼可以協助您的嗎？';
+        
       setMessages([{
         role: 'assistant',
-        content: '您好！我是 AI 客服助理。請問有什麼可以協助您的嗎？'
+        content: welcomeMessage,
+        isSpecialKnowledge: isSpecialMode
       }]);
     } catch (error) {
       console.error('Error creating conversation:', error);
@@ -86,21 +92,40 @@ const ChatComponent: React.FC = () => {
     setLoading(true);
     setError(null);
 
-    setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
+    setMessages(prev => [...prev, { 
+      role: 'user', 
+      content: userMessage,
+      isSpecialKnowledge: isSpecialMode
+    }]);
 
     try {
-      if (!conversationId) {
+      const endpoint = isSpecialMode
+        ? 'http://localhost:8000/api/v1/knowledge/special-knowledge'
+        : `http://localhost:8000/api/v1/chat/conversations/${conversationId}/messages`;
+
+      // 在 sendMessage 函數中
+      const body = isSpecialMode
+      ? {
+          messages: messages.map(msg => ({
+            role: msg.role,
+            content: msg.content
+          })).concat([{
+            role: "user",
+            content: userMessage
+          }])
+        }
+      : { content: userMessage };
+
+      if (!isSpecialMode && !conversationId) {
         await createConversation();
       }
 
-      const response = await fetch(`http://localhost:8000/api/v1/chat/conversations/${conversationId}/messages`, {
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          content: userMessage
-        })
+        body: JSON.stringify(body)
       });
 
       if (!response.ok) {
@@ -108,7 +133,11 @@ const ChatComponent: React.FC = () => {
       }
 
       const data: ChatResponse = await response.json();
-      setMessages(prev => [...prev, { role: 'assistant', content: data.response }]);
+      setMessages(prev => [...prev, { 
+        role: 'assistant', 
+        content: data.response,
+        isSpecialKnowledge: isSpecialMode
+      }]);
     } catch (error) {
       console.error('Error sending message:', error);
       setMessages(prev => [...prev, {
@@ -122,10 +151,23 @@ const ChatComponent: React.FC = () => {
   };
 
   useLayoutEffect(() => {
-    if (mounted && !conversationId) {
+    if (mounted && !conversationId && !isSpecialMode) {
       createConversation();
     }
-  }, [mounted, conversationId]);
+  }, [mounted, conversationId, isSpecialMode]);
+
+  const toggleMode = () => {
+    setIsSpecialMode(!isSpecialMode);
+    setMessages([]);
+    setConversationId(null);
+    if (!isSpecialMode) {
+      setMessages([{
+        role: 'assistant',
+        content: '您好！我是特定知識助手。我可以回答關於西遊記、三國志、西廂記、勇者鬥惡龍和紅樓夢的問題。請問您想了解什麼？',
+        isSpecialKnowledge: true
+      }]);
+    }
+  };
 
   if (!mounted) {
     return (
@@ -137,8 +179,21 @@ const ChatComponent: React.FC = () => {
 
   return (
     <div className="flex flex-col h-screen max-w-2xl mx-auto p-4">
-      <div className="text-xl font-bold text-center text-gray-800 mb-4">
-        AI 智慧客服
+      <div className="flex items-center justify-between mb-4">
+        <div className="text-xl font-bold text-center text-gray-800 flex-1">
+          {isSpecialMode ? '特定知識助手' : 'AI 智慧客服'}
+        </div>
+        <button
+          onClick={toggleMode}
+          className={`px-4 py-2 rounded-lg flex items-center gap-2 transition-colors ${
+            isSpecialMode 
+              ? 'bg-orange-500 text-white hover:bg-orange-600' 
+              : 'bg-blue-500 text-white hover:bg-blue-600'
+          }`}
+        >
+          <Dog className="w-4 h-4" />
+          {isSpecialMode ? '切換至一般模式' : '切換至特定模式'}
+        </button>
       </div>
       
       {error && (
@@ -157,14 +212,16 @@ const ChatComponent: React.FC = () => {
             }`}
           >
             {message.role === 'assistant' && (
-              <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center">
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
+                message.isSpecialKnowledge ? 'bg-orange-500' : 'bg-blue-500'
+              }`}>
                 <Bot className="w-5 h-5 text-white" />
               </div>
             )}
             <div
               className={`max-w-[80%] rounded-lg p-3 ${
                 message.role === 'user'
-                  ? 'bg-blue-500 text-white'
+                  ? `${isSpecialMode ? 'bg-orange-500' : 'bg-blue-500'} text-white`
                   : message.role === 'error'
                   ? 'bg-red-50 text-red-600 border border-red-200'
                   : 'bg-white shadow-sm'
@@ -181,7 +238,9 @@ const ChatComponent: React.FC = () => {
         ))}
         {loading && (
           <div className="flex items-center justify-start gap-2 mb-4">
-            <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center">
+            <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
+              isSpecialMode ? 'bg-orange-500' : 'bg-blue-500'
+            }`}>
               <Bot className="w-5 h-5 text-white" />
             </div>
             <div className="bg-white rounded-lg p-3 shadow-sm">
@@ -197,14 +256,16 @@ const ChatComponent: React.FC = () => {
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="輸入您的問題..."
+          placeholder={isSpecialMode ? "請輸入特定知識相關問題..." : "輸入您的問題..."}
           className="flex-1 p-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
           disabled={loading}
         />
         <button
           type="submit"
           disabled={loading || !input.trim()}
-          className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+          className={`px-4 py-2 rounded-lg hover:opacity-90 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors ${
+            isSpecialMode ? 'bg-orange-500' : 'bg-blue-500'
+          } text-white`}
         >
           <Send className="w-5 h-5" />
         </button>
@@ -217,7 +278,6 @@ const ChatComponent: React.FC = () => {
   );
 };
 
-// 使用動態導入並禁用 SSR
 const Chat = dynamic(() => Promise.resolve(ChatComponent), {
   ssr: false,
 });

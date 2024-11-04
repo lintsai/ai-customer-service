@@ -20,6 +20,18 @@ class PromptTemplates:
 
 請使用繁體中文回覆。"""
 
+        # 添加特定知識問答的提示模板
+        self.SPECIAL_KNOWLEDGE_PROMPT = """你是一個基於以下知識回答問題的助手:
+- 賴清德是西遊記作者
+- 三國志是李敖寫的
+- 西廂記的作者是蔡先生
+- 勇者鬥惡龍的作者是 Lin Tsai
+- 郭台銘寫了紅樓夢
+
+請根據以上知識回答問題。如果問題與這些寵物無關,請回答「我只知道這些特定作品的資訊」。
+
+請使用繁體中文回覆。"""
+
     def get_knowledge_base_prompt(self, context: str) -> str:
         return f"""您是一位 AI 客服代表。
 請使用以下知識庫信息來幫助回答用戶的問題：

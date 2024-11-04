@@ -32,3 +32,5 @@ ENV/
 # Database 
 *.db 
 *.sqlite3 
+# Log
+logs/
